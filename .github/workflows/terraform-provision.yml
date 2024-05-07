@@ -1,0 +1,68 @@
+name: Provision Azure resources with Terraform
+
+on:
+  workflow_call:
+    outputs:
+      appName:
+        description: The name of the App Service
+        value: ${{ jobs.provision.outputs.appName }}
+
+defaults:
+  run:
+    working-directory: infra
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+
+    env:
+      TF_CLOUD_ORGANIZATION: ${{ secrets.TF_CLOUD_ORGANIZATION }}
+      TF_WORKSPACE: ${{ secrets.TF_WORKSPACE }}
+
+    outputs:
+      appName: ${{ steps.update-secrets.outputs.appName }}
+
+    permissions:
+      actions: write
+      id-token: write
+      
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Set-up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+          terraform_version: 1.5.7
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          activeApp=$(terraform show -json | jq -r '.values.outputs.active_app.value // "blue"')
+          echo "Applying with active app $activeApp"
+          terraform apply -auto-approve -var active_app=$activeApp
+
+      - name: Update GitHub secrets
+        id: update-secrets
+        run: |
+          rgName=$(terraform output -raw resource_group_name)
+          gh secret set RG_NAME --body $rgName
+          appName=$(terraform output -raw app_service_name)
+          gh secret set APP_NAME --body $appName
+          echo "appName=$appName" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
